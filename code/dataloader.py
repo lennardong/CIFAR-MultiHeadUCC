@@ -50,11 +50,11 @@ def collate_fn(batch):
     """
     Custom collate function for combining bags into a batch.
     """
-    bags, labels_ = zip(*batch)
+    bags, labels = zip(*batch)
     # Stack the bags along a new dimension to create a batch
     bags = torch.stack(bags)
-    labels_ = torch.tensor(labels_, dtype=torch.long)
-    return bags, labels_
+    labels = torch.tensor(labels, dtype=torch.long)
+    return bags, labels
 
 
 ############################################
