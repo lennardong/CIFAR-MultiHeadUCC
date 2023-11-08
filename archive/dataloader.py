@@ -10,7 +10,7 @@ import torch
 from datasets import Dataset, DatasetDict
 
 # PyTorch
-from torchvision.transforms import Compose, ToTensor, Normalize, RandomHorizontalFlip
+
 from torch.utils.data import DataLoader
 from torchvision.transforms import Compose
 
