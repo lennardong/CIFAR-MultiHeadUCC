@@ -240,3 +240,4 @@ fabric.properties
 # Lenn
 research/
 *.npz
+data/Splitted CIFAR10.npz
