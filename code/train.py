@@ -1,10 +1,11 @@
 import os
 import torch
 from torch.utils.data import DataLoader
-from typing import Callable
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import json
+
 
 class Trainer():
     def __init__(self,
@@ -44,7 +45,9 @@ class Trainer():
         step = 0
         train_loss_accum = 0
 
-        print("###############\n# Starting Training...\n###############")
+        print("##########################\n"
+              "# Starting Training...\n"
+              "#########################")
 
         while step < self.total_steps:
             for batch_samples, batch_labels in self.train_loader:
@@ -72,7 +75,7 @@ class Trainer():
                     self.val_loss_list.append(val_loss)
                     self.val_acc_list.append(val_acc)
                     self.step_list.append(step)
-                    self.save_model()
+                    self.save_model(val_acc)
 
                     self.best_eval_acc = val_acc if val_acc > self.best_eval_acc else self.best_eval_acc
 
@@ -110,17 +113,29 @@ class Trainer():
         self.model.train()  # Switch back to training mode
         return np.mean(val_loss_list), np.mean(val_acc_list)
 
-    def save_model(self):
-        save_path = os.path.join(self.model_dir, f"{self.model_name}.pth")
-        torch.save({
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'train_loss': self.train_loss_list,
-            'val_loss': self.val_loss_list,
-            'val_acc': self.val_acc_list,
-            'step': self.step_list
-        }, save_path)
-        # print(f"Model saved to {save_path} with Val Acc: {self.val_acc_list[-1]}")
+    def save_model(self, eval_acc):
+        # Save best model
+        if eval_acc > self.best_eval_acc:
+            self.best_eval_acc = eval_acc
+            save_path = os.path.join(self.model_dir, f"{self.model_name}_best.pth")
+            torch.save({
+                'model_state_dict': self.model.state_dict(),
+                'optimizer_state_dict': self.optimizer.state_dict(),
+            }, save_path)
+
+        # Save artefacts
+        artefacts_path = os.path.join(self.model_dir, f"{self.model_name}_artefacts.json")
+        with open(artefacts_path, "w") as f:
+            json.dump(
+                {
+                    "train_loss": self.train_loss_list,
+                    "val_loss": self.val_loss_list,
+                    "val_acc": self.val_acc_list,
+                    "step": self.step_list,
+                    "best_eval_acc": self.best_eval_acc,
+                }, f, indent=4
+            )
+
 
     @staticmethod
     def loss_function(logits, decoded_img, labels, original_imgs, ucc_loss_weight=0.5):
