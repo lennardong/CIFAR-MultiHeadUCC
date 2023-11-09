@@ -108,56 +108,108 @@ class UCCModel(nn.Module):
 
         return nn.Sequential(*[conv_layer, activation_layer])
 
+    # @staticmethod
+    # def kde(data, num_bins, bandwidth):
+    #     # Get the device to ensure all operations are performed on the same device.
+    #     device = data.device
+    #
+    #     # Extract the dimensions for batch size, number of instances, and number of features.
+    #     batch_size, num_instances, num_features = data.shape
+    #
+    #     # Prepare sample points for KDE.
+    #     sample_points = torch.linspace(0, 1, steps=num_bins, device=device).expand(batch_size, num_instances, num_bins)
+    #
+    #     # Gaussian kernel constants.
+    #     normalization_const = 1 / (bandwidth * np.sqrt(2 * np.pi))
+    #     exponent_coeff = -1 / (2 * bandwidth ** 2)
+    #
+    #     # List to hold the KDE results for each feature.
+    #     kde_results = []
+    #
+    #     # Compute KDE for each feature.
+    #     for feature_index in range(num_features):
+    #
+    #         # Extract the current feature for all instances and bins.
+    #         current_feature = data[:, :, feature_index:feature_index + 1].expand(-1, -1, num_bins)
+    #
+    #         # Compute the squared differences.
+    #         squared_diff = (sample_points - current_feature) ** 2
+    #
+    #         # Apply the Gaussian kernel.
+    #         gaussian_kernel = normalization_const * torch.exp(exponent_coeff * squared_diff)
+    #
+    #         # Integrate the densities and normalize.
+    #         integrated_densities = gaussian_kernel.sum(1)
+    #         normalization_factors = integrated_densities.sum(1, keepdim=True)
+    #
+    #         # Normalize the KDE values to sum to 1.
+    #         normalized_kde = integrated_densities / normalization_factors
+    #
+    #         # Collect the results.
+    #         kde_results.append(normalized_kde)
+    #
+    #     # Concatenate the KDEs for all features.
+    #     concatenated_kde = torch.cat(kde_results, dim=1)
+    #
+    #     return concatenated_kde
+
     @staticmethod
-    def kde(features, num_bins, bandwidth):
+    def kde(data, num_bins, bandwidth):
         """
-        Performs kernel density estimation on a set of features.
+        Kernel Density Estimation (KDE) with a Gaussian kernel for feature distribution analysis.
 
         Args:
-            features (torch.Tensor): The input tensor containing the features
-                                    with shape (batch_size, num_instances, num_features).
-            num_bins (int): The number of bins to use for the kernel density estimation.
-            bandwidth (float): The bandwidth of the Gaussian kernel.
+            data (torch.Tensor): The input data tensor of shape (batch_size, num_instances, num_features).
+            num_bins (int): Number of bins to use for the KDE.
+            bandwidth (float): The bandwidth for the Gaussian kernel.
 
         Returns:
-            torch.Tensor: The output tensor containing the concatenated kernel density
-                        estimations for all features across the bins.
+            torch.Tensor: The concatenated KDE for all features across the bins, with shape (batch_size, num_bins * num_features).
         """
-        # Get the device from the input features tensor to ensure
-        # all operations are on the same device (CPU or GPU).
-        device = features.device
+        # Inits
+        device = data.device
+        batch_size, num_instances, num_features = data.shape
 
-        # Extract the dimensions for batch size, number of instances, and feature count.
-        batch_size, num_instances, num_features = features.shape
+        # Sampling
+        sample_points = torch.linspace(0, 1, steps=num_bins, device=device).expand(batch_size, num_instances, num_bins)
 
-        # Generate equally spaced sample points for KDE in the range [0, 1].
-        sample_points = torch.linspace(0, 1, steps=num_bins, device=device)
-        sample_points = sample_points.expand(batch_size, num_instances, num_bins)
-
-        # Define the normalization constant and the exponent coefficient for the Gaussian kernel.
-        normalization_const = 1 / np.sqrt(2 * np.pi * bandwidth ** 2)
+        # Kernal consts
+        normalization_const = 1 / (bandwidth * np.sqrt(2 * np.pi))
         exponent_coeff = -1 / (2 * bandwidth ** 2)
 
-        # Loop through each feature to compute its KDE.
-        feature_kde_list = []
+        # Compute
+        kde_results = []
         for feature_index in range(num_features):
-            # Select the current feature across all instances and expand it for KDE computation.
-            # Compute the squared difference between sample points and the current feature.
-            # Apply the Gaussian kernel formula to compute the density estimation.
-            # Sum the density estimations across instances for normalization.
-            # Normalize the density estimation to ensure it integrates to one.
+            # Features across all instances & expand it to match the number of bins.
+            # Expected shape: (batch_size, num_instances, num_bins)
+            current_feature = data[:, :, feature_index:feature_index + 1].expand(-1, -1, num_bins)
 
-            current_feature = features[:, :, feature_index].unsqueeze(2).expand_as(sample_points)
+            # Squared differences between sample points and the current feature.
+            # Expected shape: (batch_size, num_instances, num_bins)
             squared_diff = (sample_points - current_feature) ** 2
-            density_estimation = normalization_const * torch.exp(exponent_coeff * squared_diff)
-            density_sum = density_estimation.sum(dim=1, keepdim=True)
-            normalized_density = density_estimation / density_sum.sum(dim=2,
-                                                                      keepdim=True)  # Ensure the densities integrate to one across bins.
 
-            feature_kde_list.append(normalized_density)
+            # Gaussian kernel to the squared differences.
+            # Expected shape: (batch_size, num_instances, num_bins)
+            gaussian_kernel = normalization_const * torch.exp(exponent_coeff * squared_diff)
 
-        # Concatenate the KDE results for all features along the last dimension.
-        concatenated_kde = torch.cat(feature_kde_list, dim=-1)
+            # Integrate densities: sum the Gaussian kernel results across instances
+            # Expected shape: (batch_size, num_bins)
+            integrated_densities = gaussian_kernel.sum(1)
+
+            # Compute normalization factor to ensure the densities sum to 1. (batch-wise)
+            # Expected shape: (batch_size, 1)
+            normalization_factors = integrated_densities.sum(1, keepdim=True)
+
+            # Normalize the KDE values (feature-wise)
+            # Expected shape: (batch_size, num_bins)
+            normalized_kde = integrated_densities / normalization_factors
+
+            # Collect the KDE results for this feature.
+            kde_results.append(normalized_kde)
+
+        # Concatenate the KDE results into a single tensor.
+        # Expected shape: (batch_size, num_bins * num_features)
+        concatenated_kde = torch.cat(kde_results, dim=1)
 
         return concatenated_kde
 
@@ -175,7 +227,20 @@ class UCCModel(nn.Module):
         # Head2: KDE
         embeddings_reshaped = embedding.view(batch_size, num_instances, embedding.shape[-1])
         feature_distribution = self.kde(embeddings_reshaped, self.num_bins, self.sigma)
+        feature_distribution_howard = self.kde_howard(embeddings_reshaped, self.num_bins, self.sigma)
         logits = self.mlp_classifier(feature_distribution)
+
+        # Debug
+        print(f"""
+        x: {x.shape},
+        embedding: {embedding.shape},
+        embeddings_reshaped: {embeddings_reshaped.shape},
+        decoded_img: {decoded_img.shape},
+        feature_distribution: {feature_distribution.shape},
+        feature_distribution_howard: {feature_distribution_howard.shape},
+        KDE equality: {torch.allclose(feature_distribution, feature_distribution_howard, atol=1e-3)},
+        logits: {logits.shape}
+        """)
 
         # If labels are provided, compute the loss as a combination of UCC and autoencoder losses
         # TODO refactor this to the training loop
@@ -187,6 +252,10 @@ class UCCModel(nn.Module):
         # If no labels are provided, return the logits and reconstructed input
         return logits, decoded_img
 
+
+############################################
+# MAIN
+############################################
 
 if __name__ == "__main__":
     print("############################\\n#Testing Outputs\n############################\n")
@@ -201,7 +270,7 @@ if __name__ == "__main__":
     logits, decoded_imgs = model(random_data)
 
     # Verify output shapes
-    print("Random Data::", random_data.shape)
+    print("Random Data:", random_data.shape)
     print("Logits shape:", logits.shape)
     print("Decoded images shape:", decoded_imgs.shape)
 
