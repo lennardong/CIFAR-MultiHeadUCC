@@ -109,7 +109,7 @@ class UCCModel(nn.Module):
         return nn.Sequential(*[conv_layer, activation_layer])
 
 
-    def forward(self, x, label=None):
+    def forward(self, x):
         # Shape Bag
         batch_size, num_instances, num_channel, height, width = x.shape
         x_flat = x.view(-1, num_channel, height, width)  # Shape: (batch_size * num_instances, num_channel, height, width)
@@ -127,24 +127,16 @@ class UCCModel(nn.Module):
         logits = self.mlp_classifier(feature_distribution)  # Shape: (batch_size, num_classes)
 
         # Debug
-        print(f"""
-        x: {x.shape},
-        x_flat: {x_flat.shape},
-        embedding: {embedding.shape},
-        embeddings_reshaped: {embeddings_reshaped.shape},
-        decoded_img: {decoded_img.shape},
-        feature_distribution: {feature_distribution.shape},
-        logits: {logits.shape}
-        """)
+        # print(f"""
+        # x: {x.shape},
+        # x_flat: {x_flat.shape},
+        # embedding: {embedding.shape},
+        # embeddings_reshaped: {embeddings_reshaped.shape},
+        # decoded_img: {decoded_img.shape},
+        # feature_distribution: {feature_distribution.shape},
+        # logits: {logits.shape}
+        # """)
 
-        # If labels are provided, compute the loss as a combination of UCC and autoencoder losses
-        # TODO refactor this to the training loop
-        if label is not None:
-            ucc_loss = F.cross_entropy(logits, label)  # Use logits here for numerical stability
-            ae_loss = F.mse_loss(decoded_img, x)
-            return 0.5 * ucc_loss + 0.5 * ae_loss
-
-        # If no labels are provided, return the logits and reconstructed input
         return logits, decoded_img
 
 

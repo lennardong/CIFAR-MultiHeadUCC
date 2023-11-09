@@ -151,6 +151,7 @@ def create_dataloaders(
         upper_ucc: int,
         bag_size: int,
         bag_fraction: float,
+        batch_size: int,
         transform: Dict = None) -> Dict[str, DataLoader]:
     """
     Creates PyTorch DataLoaders for CIFAR-10 data splits based on UCC combinations.
@@ -170,7 +171,7 @@ def create_dataloaders(
         )
 
         # Specify the custom collate function for the DataLoader
-        dataloaders[split] = DataLoader(dataset, batch_size=12, shuffle=True, collate_fn=collate_fn)
+        dataloaders[split] = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 
     return dataloaders
 
@@ -188,7 +189,7 @@ if __name__ == "__main__":
         'normalize': lambda img: F.normalize(img, mean=[0.4914, 0.4822, 0.4465], std=[0.247, 0.243, 0.261])
     }
 
-    dataloaders = create_dataloaders(PATH, 2, 4, 300, 0.1, transforms)
+    dataloaders = create_dataloaders(PATH, 2, 4, 300, 0.1, 12, transforms)
 
     # Testing the dataloaders
     for images, labels in dataloaders['train']:
