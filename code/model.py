@@ -2,133 +2,63 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import matplotlib.pyplot as plt
+from torchvision.utils import make_grid
 
 
-class ResidualZeroPaddingBlock(nn.Module):
-    def __init__(
-        self,
-        in_channels,
-        out_channels,
-        first_block=False,
-        down_sample=False,
-        up_sample=False,
-    ):
-        super(ResidualZeroPaddingBlock, self).__init__()
-        self.first_block = first_block
-        self.down_sample = down_sample
-        self.up_sample = up_sample
-
-        if self.up_sample:
-            self.upsampling = nn.Upsample(scale_factor=2, mode="nearest")
-
-        self.conv1 = nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size=3,
-            padding=1,
-            stride=2 if self.down_sample else 1,
-        )
-        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1)
-        self.skip_conv = nn.Conv2d(
-            in_channels,
-            out_channels,
-            kernel_size=1,
-            stride=2 if self.down_sample else 1,
-        )
-
-        # Initialize the weights and biases
-        nn.init.xavier_uniform_(self.conv1.weight)
-        nn.init.constant_(self.conv1.bias, 0.1)
-        nn.init.xavier_uniform_(self.conv2.weight)
-        nn.init.constant_(self.conv2.bias, 0.1)
-        nn.init.xavier_uniform_(self.skip_conv.weight)
-
-    def forward(self, x):
-        if self.first_block:
-            x = F.relu(x)
-            if self.up_sample:
-                x = self.upsampling(x)
-            out = F.relu(self.conv1(x))
-            out = self.conv2(out)
-            if x.shape != out.shape:
-                x = self.skip_conv(x)
-        else:
-            out = F.relu(self.conv1(x))
-            out = F.relu(self.conv2(out))
-
-        return x + out
-    
-
-class Reshape(nn.Module):
-    def __init__(self, *target_shape):
-        super(Reshape, self).__init__()
-        self.target_shape = target_shape
-
-    def forward(self, x):
-        return x.view(x.size(0), *self.target_shape)
-
-# TODO - replace model_cfg with simpler input variables 
-# TODO - 
 class UCCModel(nn.Module):
-    def __init__(self, model_cfg):
+    def __init__(self, num_bins, sigma, dropout_rate, num_classes, embedding_size, fc2_size):
         super(UCCModel, self).__init__()
-        self.num_bins = model_cfg.kde_model.num_bins
-        self.sigma = model_cfg.kde_model.sigma
+        self.num_bins = num_bins
+        self.sigma = sigma
+        self.embedding_size = embedding_size
+        self.num_classes = num_classes
+        self.dropout_rate = dropout_rate
+        self.fc2_size = fc2_size
 
-        self.prev_out_channels = 3  # initialize w 3 (3x32x32)
         # State Variables
-        self.feature_size = 110
-        
-        # Encoder
+        self.prev_out_channels = 3  # initialize w 3 (3x32x32)
+
+        # Encoder - UNet-like without skip connections
         self.encoder = nn.Sequential(
             # input: 3 x 32 x 32 
             self.conv_downsampler(18, 1),  # output: 18 x 32 x 32
             self.conv_downsampler(18, 2),  # output: 18 x 16 x 16
             self.conv_downsampler(18, 1),  # output: 18 x 16 x 16
-            self.conv_downsampler(9, 1),   # output: 9 x 16 x 16
-            self.conv_downsampler(9, 2),   # output: 9 x 8 x 8
-            nn.Flatten(),                  # output: 576
+            self.conv_downsampler(9, 1),  # output: 9 x 16 x 16
+            self.conv_downsampler(9, 2),  # output: 9 x 8 x 8
+            nn.Flatten(),  # output: 576
             nn.Linear(9 * 8 * 8, 576),
             nn.ReLU(),
             nn.Linear(576, 288),
             nn.ReLU(),
-            nn.Linear(288, self.feature_size),   # output: latent_size
+            nn.Linear(288, self.embedding_size),  # output: latent_size
         )
 
         # Decoder
         self.decoder = nn.Sequential(
             # input: latent_size
-            nn.Linear(self.feature_size, 288),   # output: 288
-            nn.Linear(288, 576),           # output: 576
-            nn.Linear(576, 9 * 8 * 8),     # output: 576
-            nn.Unflatten(1, (9, 8, 8)),    # output: 9 x 8 x 8
-            self.conv_upsampler(9, 2),     # output: 9 x 16 x 16
-            self.conv_upsampler(9, 1),     # output: 9 x 16 x 16
-            self.conv_upsampler(18, 1),    # output: 18 x 16 x 16
-            self.conv_upsampler(18, 2),    # output: 18 x 32 x 32
-            self.conv_upsampler(3, 1, final_layer=True),  # output: 3 x 32 x 32
-            # TODO fix argument `final_layer`
+            nn.Linear(self.embedding_size, 288),  # output: 288
+            nn.Linear(288, 576),  # output: 576
+            nn.Linear(576, 9 * 8 * 8),  # output: 576
+            nn.Unflatten(1, (9, 8, 8)),  # output: 9 x 8 x 8
+            self.conv_upsampler(9, 2),  # output: 9 x 16 x 16
+            self.conv_upsampler(9, 1),  # output: 9 x 16 x 16
+            self.conv_upsampler(18, 1),  # output: 18 x 16 x 16
+            self.conv_upsampler(18, 2),  # output: 18 x 32 x 32
+            self.conv_upsampler(3, 1, use_activation=True),  # output: 3 x 32 x 32
         )
 
-        self.autoencoder_model = nn.Sequential(
-            self.patch_model, self.image_generation_model
-        )
-
-        fc1_input_size = model_cfg.patch_model.num_features * self.num_bins
-        # Define the classification layers
-        # add dropout layer
-        self.dropout = nn.Dropout(p=model_cfg.classification_model.dropout_rate)
-        self.fc_relu1 = nn.Linear(
-            fc1_input_size,
-            model_cfg.classification_model.fc1_output_size,
-        )
-        self.fc_relu2 = nn.Linear(
-            model_cfg.classification_model.fc1_output_size,
-            model_cfg.classification_model.fc2_output_size,
-        )
-        self.fc_softmax = nn.Linear(
-            model_cfg.classification_model.fc2_output_size,
-            model_cfg.classification_model.num_classes,
+        # Classifier part encapsulated within a Sequential module
+        fc1_input_size = self.embedding_size * self.num_bins
+        self.mlp_classifier = nn.Sequential(
+            nn.Dropout(p=self.dropout_rate),
+            nn.Linear(fc1_input_size, self.fc2_size),
+            nn.ReLU(),
+            nn.Dropout(p=self.dropout_rate),
+            nn.Linear(self.fc2_size, self.fc2_size // 2),
+            nn.ReLU(),
+            nn.Linear(self.fc2_size // 2, self.num_classes)
         )
 
         # Initialize the weights and biases
@@ -138,64 +68,29 @@ class UCCModel(nn.Module):
                 nn.init.constant_(m.bias, 0.1)
             elif isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight)
-    
-    def forward(self, x, label=None):
-        
-        # Shape Bag
-        # x shape: (batch_size, num_instances, num_channel, patch_size, patch_size)
-        # reshape x to (batch_size * num_instances, 1, patch_size, patch_size)
-        batch_size, num_instances, num_channel, _, _ = x.shape
-        x = x.view(-1, num_channel, x.shape[-2], x.shape[-1])
-        
-        # Generate Features 
-        theta_feature = self.encoder(x)
-        theta_decoder = self.decoder(theta_feature)
-        
-        # KDE
-        # reshape output to (batch_size, num_instances, num_features)
-        # use kernel density estimation to estimate the distribution of the features
-        # output of kde is concatenated features distribution
-        
-        theta_feature_reshape = theta_feature.view(batch_size, num_instances, theta_feature.shape[-1])
-        feature_distribution = self.kde(theta_feature_reshape, self.num_bins, self.sigma)
 
-        out = self.mlp(feature_distribution)
-
-
-        # Ouputs
-        # If labels are provided, compute the loss as a combination of UCC and autoencoder losses
-        # If no labels are provided, return the output predictions and reconstructed input
-        
-        if label is not None:
-            ucc_loss = F.cross_entropy(out, label)
-            # autoencoder loss
-            ae_loss = F.mse_loss(theta_decoder, x)
-            return 0.5 * ucc_loss + 0.5 * ae_loss
-
-        return out, theta_decoder
-    
     def conv_downsampler(self, out_channels: int, downsample_factor: int, ks=3, use_activation=True) -> nn.Module:
-        ''' Return a CNN layer that is same sized or downsampled with optional ReLU activation
-        '''
+        """ Return a CNN layer that is same sized or downsampled with optional ReLU activation
+        """
         conv_layer = nn.Conv2d(
-            in_channels=self.prev_out_channels, # use prev layer as input to this layer
+            in_channels=self.prev_out_channels,  # use prev layer as input to this layer
             out_channels=out_channels,
             kernel_size=ks,
             stride=downsample_factor,
-            padding= ks //2
-            )
+            padding=ks // 2
+        )
         activation_layer = nn.ReLU(inplace=True) if use_activation else nn.Identity()
-        
+
         self.prev_out_channels = out_channels  # Update the last output channels
-        
+
         return nn.Sequential(*[conv_layer, activation_layer])
-    
+
     def conv_upsampler(self, out_channels: int, upsample_factor: int, ks=3, use_activation=True) -> nn.Module:
-        ''' Return a CNN layer that is same-sized or upsampled with optional ReLU activation
-        '''
+        """ Return a CNN layer that is same-sized or upsampled with optional ReLU activation
+        """
         padding = ks // 2  # Adjust padding here
         output_padding = 0  # Initialize output_padding
-        
+
         if upsample_factor > 1:
             output_padding = upsample_factor - 1  # This will add one cell to each side of the output feature map
 
@@ -208,86 +103,146 @@ class UCCModel(nn.Module):
             output_padding=output_padding  # Add output_padding
         )
         activation_layer = nn.ReLU(inplace=True) if use_activation else nn.Identity()
-        
+
         self.prev_out_channels = out_channels  # Update the last output channels
-        
+
         return nn.Sequential(*[conv_layer, activation_layer])
 
 
-    def feature_extractor(self, x):
-        batch_size, num_instances, _, _, _ = x.shape
-        x = x.view(-1, 1, x.shape[-2], x.shape[-1])
-        feature = self.patch_model(x)
-        feature = feature.view(batch_size, num_instances, feature.shape[-1])
-        return feature
+    def forward(self, x, label=None):
+        # Shape Bag
+        batch_size, num_instances, num_channel, height, width = x.shape
+        x_flat = x.view(-1, num_channel, height, width)  # Shape: (batch_size * num_instances, num_channel, height, width)
 
-    def feature_distribution(self, x):
-        feature = self.feature_extractor(x)
-        feature_distribution = self.kde(feature, self.num_bins, self.sigma)
-        return feature_distribution
+        # Generate Features (vector embeddings)
+        embedding = self.encoder(x_flat)  # Shape: (batch_size * num_instances, embedding_size)
 
-    def mlp(self, y):
-        y1 = F.relu(self.fc_relu1(self.dropout(y)))
-        y1 = F.relu(self.fc_relu2(self.dropout(y1)))
-        y1 = self.dropout(y1)
-        out = F.softmax(self.fc_softmax(y1), dim=1)
-        return out
+        # Head1: AutoEncoder
+        decoded_img_flat = self.decoder(embedding)  # Shape: (batch_size * num_instances, num_channel, height, width)
+        decoded_img = decoded_img_flat.view(batch_size, num_instances, num_channel, height, width)  # Shape: (batch_size, num_instances, num_channel, height, width)
 
-    def kde(self, data, num_nodes, sigma):
+        # Head2: KDE
+        embeddings_reshaped = embedding.view(batch_size, num_instances, embedding.shape[-1])  # Shape: (batch_size, num_instances, embedding_size)
+        feature_distribution = self.kde(embeddings_reshaped, self.num_bins, self.sigma)  # Shape: (batch_size, num_bins * embedding_size)
+        logits = self.mlp_classifier(feature_distribution)  # Shape: (batch_size, num_classes)
+
+        # Debug
+        print(f"""
+        x: {x.shape},
+        x_flat: {x_flat.shape},
+        embedding: {embedding.shape},
+        embeddings_reshaped: {embeddings_reshaped.shape},
+        decoded_img: {decoded_img.shape},
+        feature_distribution: {feature_distribution.shape},
+        logits: {logits.shape}
+        """)
+
+        # If labels are provided, compute the loss as a combination of UCC and autoencoder losses
+        # TODO refactor this to the training loop
+        if label is not None:
+            ucc_loss = F.cross_entropy(logits, label)  # Use logits here for numerical stability
+            ae_loss = F.mse_loss(decoded_img, x)
+            return 0.5 * ucc_loss + 0.5 * ae_loss
+
+        # If no labels are provided, return the logits and reconstructed input
+        return logits, decoded_img
+
+
+    @staticmethod
+    def kde(data, num_bins, bandwidth):
+        """
+        Kernel Density Estimation (KDE) with a Gaussian kernel for feature distribution analysis.
+
+        Args:
+            data (torch.Tensor): The input data tensor of shape (batch_size, num_instances, num_features).
+            num_bins (int): Number of bins to use for the KDE.
+            bandwidth (float): The bandwidth for the Gaussian kernel.
+
+        Returns:
+            torch.Tensor: The concatenated KDE for all features across the bins, with shape (batch_size, num_bins * num_features).
+        """
+        # Inits
         device = data.device
-        # data shape: (batch_size, num_instances, num_features)
         batch_size, num_instances, num_features = data.shape
 
-        # Create sample points
-        k_sample_points = (
-            torch.linspace(0, 1, steps=num_nodes)
-            .repeat(batch_size, num_instances, 1)
-            .to(device)
-        )
+        # Sampling
+        sample_points = torch.linspace(0, 1, steps=num_bins, device=device).expand(batch_size, num_instances, num_bins)
 
-        # Calculate constants
-        k_alpha = 1 / np.sqrt(2 * np.pi * sigma**2)
-        k_beta = -1 / (2 * sigma**2)
+        # Kernal consts
+        normalization_const = 1 / (bandwidth * np.sqrt(2 * np.pi))
+        exponent_coeff = -1 / (2 * bandwidth ** 2)
 
-        # Iterate over features and calculate kernel density estimation for each feature
-        out_list = []
-        for i in range(num_features):
-            one_feature = data[:, :, i : i + 1].repeat(1, 1, num_nodes)
-            k_diff_2 = (k_sample_points - one_feature) ** 2
-            k_result = k_alpha * torch.exp(k_beta * k_diff_2)
-            k_out_unnormalized = k_result.sum(dim=1)
-            k_norm_coeff = k_out_unnormalized.sum(dim=1).view(-1, 1)
-            k_out = k_out_unnormalized / k_norm_coeff.repeat(
-                1, k_out_unnormalized.size(1)
-            )
-            out_list.append(k_out)
+        # Compute
+        kde_results = []
+        for feature_index in range(num_features):
 
-        # Concatenate the results
-        concat_out = torch.cat(out_list, dim=-1)
-        return concat_out
+            # Features across all instances & expand it to match the number of bins.
+            # Expected shape: (batch_size, num_instances, num_bins)
+            current_feature = data[:, :, feature_index:feature_index + 1]  # Shape: (batch_size, num_instances, 1)
+            current_feature = current_feature.expand(-1, -1, num_bins)  # Shape: (batch_size, num_instances, num_bins)
 
-    def generate_image_from_feature(self, feature):
-        # feature shape: (batch_size, num_features)
-        if len(feature.shape) == 3:
-            # feature shape: (batch_size, num_instances, num_features)
-            batch_size, num_instances, num_features = feature.shape
-            feature = feature.view(-1, num_features)
-        # generate image
-        generated_image = self.image_generation_model(feature)
-        if len(feature.shape) == 3:
-            # reshape image to (batch_size, num_instances, 1, patch_size, patch_size)
-            generated_image = generated_image.view(
-                batch_size,
-                num_instances,
-                1,
-                generated_image.shape[-2],
-                generated_image.shape[-1],
-            )
-        return generated_image
+            # Squared differences between sample points and the current feature.
+            # Expected shape: (batch_size, num_instances, num_bins)
+            squared_diff = (sample_points - current_feature) ** 2
+
+            # Gaussian kernel to the squared differences.
+            # Expected shape: (batch_size, num_instances, num_bins)
+            gaussian_kernel = normalization_const * torch.exp(exponent_coeff * squared_diff)
+
+            # Integrate densities: sum the Gaussian kernel results across instances
+            # Expected shape after sum: (batch_size, num_bins)
+            integrated_densities = gaussian_kernel.sum(1)
+
+            # Compute normalization factor for each batch to ensure the densities sum to 1.
+            # Expected shape after sum: (batch_size, 1)
+            normalization_factors = integrated_densities.sum(1, keepdim=True)
+
+            # Normalize the KDE values for each feature.
+            # Expected shape: (batch_size, num_bins)
+            normalized_kde = integrated_densities / normalization_factors
+
+            # Collect the KDE results for this feature.
+            kde_results.append(normalized_kde)
+
+        # Concatenate the KDE results for all features into a single tensor.
+        # Expected final shape: (batch_size, num_bins * num_features)
+        concatenated_kde = torch.cat(kde_results, dim=1)
+
+        return concatenated_kde
 
 
-# TODO implement dataclass
-from dataclasses import dataclass
-@dataclass
-class model_cfg:
-    kde_model_bins = kde_model_bins
+
+############################################
+# MAIN
+############################################
+
+if __name__ == "__main__":
+    print("############################\n# Testing Outputs\n############################\n")
+    # Define the model (assuming UCCModel class is already defined)
+    model = UCCModel(12, 0.5, 0.1, 5, 110, 512)
+
+    # Generate a batch of random data
+    batch_size, num_instances, channels, height, width = 2, 5, 3, 32, 32
+    random_data = torch.randn((batch_size, num_instances, channels, height, width))
+
+    # Forward pass through the model
+    logits, decoded_imgs = model(random_data)
+
+    # Verify output shapes
+    print("Random Data:", random_data.shape)
+    print("Logits shape:", logits.shape)
+    print("Decoded images shape:", decoded_imgs.shape)
+
+    # Visualization
+    # Convert the decoded images to a grid for easier visualization
+    # decoded_img_grid = make_grid(decoded_imgs[0], nrow=num_instances)
+    # plt.imshow(decoded_img_grid.permute(1, 2, 0).detach().cpu().numpy())
+    # plt.title("Reconstructed Images")
+    # plt.axis('off')
+    # plt.show()
+
+    """
+    Random Data:: torch.Size([2, 5, 3, 32, 32])
+    Logits shape: torch.Size([2, 5, 5])
+    Decoded images shape: torch.Size([10, 3, 32, 32])
+    """
