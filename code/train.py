@@ -1,4 +1,6 @@
 import os
+from math import nan
+
 import torch
 from torch.utils.data import DataLoader
 import torch.nn as nn
@@ -80,6 +82,10 @@ class Trainer():
                     self.save_model(val_acc)
 
                     self.best_eval_acc = val_acc if val_acc > self.best_eval_acc else self.best_eval_acc
+
+                    if train_loss == nan or val_loss == nan or val_acc == nan:
+                        print("NaN loss detected. Exiting training...")
+                        break
 
                     # Update progress bar
                     pbar.set_postfix_str(
