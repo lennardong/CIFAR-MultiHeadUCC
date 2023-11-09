@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import json
-
+from tqdm import tqdm
 
 class Trainer():
     def __init__(self,
@@ -49,6 +49,8 @@ class Trainer():
               "# Starting Training...\n"
               "#########################")
 
+        pbar = tqdm(total=self.total_steps, desc='Training Progress')
+
         while step < self.total_steps:
             for batch_samples, batch_labels in self.train_loader:
                 # Move data to the device
@@ -79,15 +81,17 @@ class Trainer():
 
                     self.best_eval_acc = val_acc if val_acc > self.best_eval_acc else self.best_eval_acc
 
-                    # TODO amend to 4dp
-                    print(f"Step {step} | Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
-
+                    # Update progress bar
+                    pbar.set_postfix_str(
+                        f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
+                    pbar.update(self.eval_interval)
 
                 step += 1
                 if step >= self.total_steps:
                     break
 
-        print(f"Training completed. Best validation accuracy: {self.best_eval_acc}")
+        pbar.close()
+        print(f"Training completed. Best validation accuracy: {self.best_eval_acc:.4f}")
 
     def evaluate(self):
         self.model.eval()
