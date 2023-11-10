@@ -49,6 +49,11 @@ class UCCModel(nn.Module):
             self.conv_upsampler(3, 1, use_activation=True),  # output: 3 x 32 x 32
         )
 
+        # TODO implement with sigmoid
+        self.kde_feature = nn.Sequential(
+            nn.Sigmoid()
+        )
+
         # Classifier part encapsulated within a Sequential module
         fc1_input_size = self.embedding_size * self.num_bins
         self.mlp_classifier = nn.Sequential(

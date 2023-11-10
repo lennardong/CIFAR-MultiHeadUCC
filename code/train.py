@@ -9,6 +9,17 @@ import numpy as np
 import json
 from tqdm import tqdm
 
+
+def loss_function(logits, decoded_img, labels, original_imgs, ucc_loss_weight=0.5):
+
+    ae_loss_weight = 1 - ucc_loss_weight
+
+    ucc_loss = F.cross_entropy(logits, labels)
+    ae_loss = F.mse_loss(decoded_img, original_imgs)
+    combined_loss = (ucc_loss_weight * ucc_loss) + (ae_loss_weight * ae_loss)
+
+    return combined_loss
+
 class Trainer():
     def __init__(self,
                  model: nn.Module,
