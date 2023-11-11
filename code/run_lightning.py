@@ -117,23 +117,23 @@ class UCCModule(L.LightningModule):
         ############################
 
         # Encoder
-        embeddings = self.ucc_model.encoder(x_flat)
+        embeddings_conv = self.ucc_model.encoder(x_flat)
 
         # Head1: Decoder
-        decoded_img_flat = self.ucc_model.decoder(embeddings)
+        decoded_img_flat = self.ucc_model.decoder(embeddings_conv)
         decoded_img = decoded_img_flat.view(batch_size, num_instances, num_channel, height,
                                             width)  # Shape: (batch_size, num_instances, num_channel, height, width)
 
         # Head2: KDE
 
-        embeddings_reshaped = embeddings.view(batch_size, num_instances, embeddings.shape[
+        embeddings_fc = self.ucc_model.kde_embeddings(embeddings_conv)
+        embeddings_reshaped = embeddings_fc.view(batch_size, num_instances, embeddings_fc.shape[
             -1])  # Shape: (batch_size, num_instances, embedding_size)
         feature_distribution = self.ucc_model.kde(embeddings_reshaped, self.ucc_model.num_bins,
                                                   self.ucc_model.sigma)  # Shape: (batch_size, num_bins * embedding_size)
         logits = self.ucc_model.mlp_classifier(feature_distribution)
 
         return logits, decoded_img
-
 
     def training_step(self, batch, batch_idx):
         x, y = batch
@@ -156,8 +156,15 @@ class UCCModule(L.LightningModule):
         ucc_loss, ae_loss, val_loss = self.loss_function(logits, decoded_img, y, x)
 
         # Compute accuracy
-        _, preds = torch.max(logits, dim=1)
-        val_acc = (preds == y).float().mean().item()
+        # Convert logits to predicted classes
+        preds = torch.argmax(logits, dim=1)
+        # Compute number of correct predictions
+        correct_count = torch.sum(preds == y)
+        # Calculate accuracy
+        val_acc = correct_count.float() / y.size(0)
+
+        # _, preds = torch.max(logits, dim=1)
+        # val_acc = (preds == y).float().mean().item()
 
         # logging
         self.log_dict({
@@ -174,5 +181,13 @@ class UCCModule(L.LightningModule):
 ucc_module = UCCModule(model, loss_multihead)
 
 # Train the model
-trainer = L.Trainer(max_steps=1000)
-trainer.fit(model=ucc_module, train_dataloaders=train_loader, val_dataloaders= val_loader)
+
+
+trainer = L.Trainer(max_steps=1000, default_root_dir="../logs")
+trainer.fit(model=ucc_module, train_dataloaders=train_loader, val_dataloaders=val_loader)
+
+# TRY TO CALL TF BOARD
+# from lightning.pytorch.loggers import TensorBoardLogger
+# logger = TensorBoardLogger(save_dir="./test_logs/")
+# trainer = L.Trainer(max_steps=1000, default_root_dir="../logs", logger=logger)
+# trainer = L.Trainer(max_steps=1000, logger=logger)

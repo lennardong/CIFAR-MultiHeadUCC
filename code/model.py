@@ -19,39 +19,36 @@ class UCCModel(nn.Module):
         # State Variables
         self.prev_out_channels = 3  # initialize w 3 (3x32x32)
 
-        # Encoder - UNet-like without skip connections
+        # Encoder: Simplified U-Net style without skip connections
         self.encoder = nn.Sequential(
-            # input: 3 x 32 x 32 
-            self.conv_downsampler(18, 1),  # output: 18 x 32 x 32
-            self.conv_downsampler(18, 2),  # output: 18 x 16 x 16
-            self.conv_downsampler(18, 1),  # output: 18 x 16 x 16
-            self.conv_downsampler(9, 1),  # output: 9 x 16 x 16
-            self.conv_downsampler(9, 2),  # output: 9 x 8 x 8
-            nn.Flatten(),  # output: 576
-            nn.Linear(9 * 8 * 8, 576),
-            nn.ReLU(),
-            nn.Linear(576, 288),
-            nn.ReLU(),
-            nn.Linear(288, self.embedding_size),  # output: latent_size
+            self.conv_downsampler(16, 1),  # output: 16 x 32 x 32
+            self.conv_downsampler(32, 2),  # output: 32 x 16 x 16
+            self.conv_downsampler(64, 2),  # output: 64 x 8 x 8
         )
 
-        # Decoder
-        self.decoder = nn.Sequential(
-            # input: latent_size
-            nn.Linear(self.embedding_size, 288),  # output: 288
-            nn.Linear(288, 576),  # output: 576
-            nn.Linear(576, 9 * 8 * 8),  # output: 576
-            nn.Unflatten(1, (9, 8, 8)),  # output: 9 x 8 x 8
-            self.conv_upsampler(9, 2),  # output: 9 x 16 x 16
-            self.conv_upsampler(9, 1),  # output: 9 x 16 x 16
-            self.conv_upsampler(18, 1),  # output: 18 x 16 x 16
-            self.conv_upsampler(18, 2),  # output: 18 x 32 x 32
-            self.conv_upsampler(3, 1, use_activation=True),  # output: 3 x 32 x 32
-        )
-
-        # TODO implement with sigmoid
-        self.kde_feature = nn.Sequential(
+        # KDE Embeddings: Flatten and sigmoid activation
+        self.kde_embeddings = nn.Sequential(
+            nn.Flatten(),  # Flatten the output of the encoder
+            nn.Linear(64 * 8 * 8, self.embedding_size),
             nn.Sigmoid()
+        )
+
+        # self.kde_feature = nn.Sequential(
+        #     nn.Flatten(),  # output: 576
+        #     nn.Linear(9 * 8 * 8, 576),
+        #     nn.ReLU(),
+        #     nn.Linear(576, 288),
+        #     nn.ReLU(),
+        #     nn.Linear(288, self.embedding_size),  # output: latent_size
+        #     nn.Sigmoid()
+        # )
+
+        # Decoder: Simplified U-Net style without skip connections
+        self.decoder = nn.Sequential(
+            self.conv_upsampler(64, 2),  # output: 64 x 16 x 16
+            self.conv_upsampler(32, 2),  # output: 32 x 32 x 32
+            self.conv_upsampler(16, 1),  # output: 16 x 32 x 32
+            nn.Conv2d(16, 3, kernel_size=1),  # output: 3 x 32 x 32
         )
 
         # Classifier part encapsulated within a Sequential module
