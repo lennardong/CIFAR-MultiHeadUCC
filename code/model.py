@@ -2,8 +2,17 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import matplotlib.pyplot as plt
-from torchvision.utils import make_grid
+from dataclasses import dataclass
+
+
+@dataclass
+class ModelConfig:
+    num_bins: int = 20
+    sigma: float = 0.3
+    dropout_rate: float = 0.1
+    num_classes: int = 4
+    embedding_size: int = 200
+    fc2_size: int = 512
 
 
 class UCCModel(nn.Module):
@@ -22,45 +31,41 @@ class UCCModel(nn.Module):
         # Encoder: Simplified U-Net style without skip connections
         self.encoder = nn.Sequential(
             self.conv_downsampler(16, 1),  # output: 16 x 32 x 32
+            # self.conv_downsampler(16, 1),  # output: 16 x 32 x 32
             self.conv_downsampler(32, 2),  # output: 32 x 16 x 16
+            # self.conv_downsampler(32, 1),  # output: 32 x 16 x 16
             self.conv_downsampler(64, 2),  # output: 64 x 8 x 8
         )
 
         # KDE Embeddings: Flatten and sigmoid activation
         self.kde_embeddings = nn.Sequential(
             nn.Flatten(),  # Flatten the output of the encoder
-            nn.Linear(64 * 8 * 8, self.embedding_size),
+            nn.Linear(64 * 8 * 8, self.embedding_size * 2),  # 4096
+            nn.ReLU(),
+            nn.Linear(self.embedding_size * 2, self.embedding_size),
             nn.Sigmoid()
         )
-
-        # self.kde_feature = nn.Sequential(
-        #     nn.Flatten(),  # output: 576
-        #     nn.Linear(9 * 8 * 8, 576),
-        #     nn.ReLU(),
-        #     nn.Linear(576, 288),
-        #     nn.ReLU(),
-        #     nn.Linear(288, self.embedding_size),  # output: latent_size
-        #     nn.Sigmoid()
-        # )
 
         # Decoder: Simplified U-Net style without skip connections
         self.decoder = nn.Sequential(
             self.conv_upsampler(64, 2),  # output: 64 x 16 x 16
+            # self.conv_upsampler(64, 1),  # output: 64 x 16 x 16
             self.conv_upsampler(32, 2),  # output: 32 x 32 x 32
+            # self.conv_upsampler(32, 1),  # output: 32 x 32 x 32
             self.conv_upsampler(16, 1),  # output: 16 x 32 x 32
             nn.Conv2d(16, 3, kernel_size=1),  # output: 3 x 32 x 32
         )
 
         # Classifier part encapsulated within a Sequential module
-        fc1_input_size = self.embedding_size * self.num_bins
+        self.fc1_input_size = self.embedding_size * self.num_bins
         self.mlp_classifier = nn.Sequential(
             nn.Dropout(p=self.dropout_rate),
-            nn.Linear(fc1_input_size, self.fc2_size),
+            nn.Linear(self.fc1_input_size, self.fc2_size),
             nn.ReLU(),
             nn.Dropout(p=self.dropout_rate),
             nn.Linear(self.fc2_size, self.fc2_size // 2),
             nn.ReLU(),
-            nn.Linear(self.fc2_size // 2, self.num_classes)
+            nn.Linear(self.fc2_size // 2, self.num_classes),
         )
 
         # Initialize the weights and biases
@@ -110,51 +115,42 @@ class UCCModel(nn.Module):
 
         return nn.Sequential(*[conv_layer, activation_layer])
 
-
     def forward(self, x):
-        # Shape Bag
+        # get channel shapes
         batch_size, num_instances, num_channel, height, width = x.shape
-        x_flat = x.view(-1, num_channel, height, width)  # Shape: (batch_size * num_instances, num_channel, height, width)
+        x_flat = x.view(-1, num_channel, height, width)
 
-        # Generate Features (vector embeddings)
-        embedding = self.encoder(x_flat)  # Shape: (batch_size * num_instances, embedding_size)
+        # Encoder
+        embeddings_conv = self.encoder(x_flat)
 
-        # Head1: AutoEncoder
-        decoded_img_flat = self.decoder(embedding)  # Shape: (batch_size * num_instances, num_channel, height, width)
+        # Head1: Decoder
+        decoded_img_flat = self.decoder(embeddings_conv)
         decoded_img = decoded_img_flat.view(batch_size, num_instances, num_channel, height, width)  # Shape: (batch_size, num_instances, num_channel, height, width)
 
         # Head2: KDE
-        embeddings_reshaped = embedding.view(batch_size, num_instances, embedding.shape[-1])  # Shape: (batch_size, num_instances, embedding_size)
-        feature_distribution = self.kde(embeddings_reshaped, self.num_bins, self.sigma)  # Shape: (batch_size, num_bins * embedding_size)
-        logits = self.mlp_classifier(feature_distribution)  # Shape: (batch_size, num_classes)
+        embeddings_fc = self.kde_embeddings(embeddings_conv)
+        embeddings_reshaped = embeddings_fc.view(batch_size, num_instances, embeddings_fc.shape[-1])  # Shape: (batch_size, num_instances, embedding_size)
+        feature_distribution = self.kde(embeddings_reshaped, self.num_bins,
+                                                  self.sigma)  # Shape: (batch_size, num_bins * embedding_size)
 
-        # Debug
-        # print(f"""
-        # x: {x.shape},
-        # x_flat: {x_flat.shape},
-        # embedding: {embedding.shape},
-        # embeddings_reshaped: {embeddings_reshaped.shape},
-        # decoded_img: {decoded_img.shape},
-        # feature_distribution: {feature_distribution.shape},
-        # logits: {logits.shape}
-        # """)
+        logits = self.mlp_classifier(feature_distribution)
 
         return logits, decoded_img
 
+    @staticmethod
+    def loss_function_multihead(logits, decoded_img, labels, original_imgs, ucc_loss_weight=0.5):
+
+        ae_loss_weight = 1 - ucc_loss_weight
+
+        ucc_loss = F.cross_entropy(logits, labels)
+        ae_loss = F.mse_loss(decoded_img, original_imgs)
+        combined_loss = (ucc_loss_weight * ucc_loss) + (ae_loss_weight * ae_loss)
+
+        return ucc_loss, ae_loss, combined_loss
 
     @staticmethod
     def kde(data, num_bins, bandwidth):
-        """
-        Kernel Density Estimation (KDE) with a Gaussian kernel for feature distribution analysis.
 
-        Args:
-            data (torch.Tensor): The input data tensor of shape (batch_size, num_instances, num_features).
-            num_bins (int): Number of bins to use for the KDE.
-            bandwidth (float): The bandwidth for the Gaussian kernel.
-
-        Returns:
-            torch.Tensor: The concatenated KDE for all features across the bins, with shape (batch_size, num_bins * num_features).
-        """
         # Inits
         device = data.device
         batch_size, num_instances, num_features = data.shape
@@ -205,7 +201,6 @@ class UCCModel(nn.Module):
         return concatenated_kde
 
 
-
 ############################################
 # MAIN
 ############################################
@@ -226,14 +221,6 @@ if __name__ == "__main__":
     print("Random Data:", random_data.shape)
     print("Logits shape:", logits.shape)
     print("Decoded images shape:", decoded_imgs.shape)
-
-    # Visualization
-    # Convert the decoded images to a grid for easier visualization
-    # decoded_img_grid = make_grid(decoded_imgs[0], nrow=num_instances)
-    # plt.imshow(decoded_img_grid.permute(1, 2, 0).detach().cpu().numpy())
-    # plt.title("Reconstructed Images")
-    # plt.axis('off')
-    # plt.show()
 
     """
     Random Data:: torch.Size([2, 5, 3, 32, 32])
