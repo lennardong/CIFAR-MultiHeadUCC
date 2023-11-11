@@ -2,6 +2,7 @@
 from typing import Dict, List, Tuple
 from itertools import combinations
 import random
+from dataclasses import dataclass
 
 # PyTorch imports
 import torch
@@ -83,7 +84,7 @@ class CIFAR10BagsDataset(Dataset):
         self.bags, self.bag_labels = self.precompute_bags(ucc_combinations) # Precompute bags to speed up __getitem__
         self.transform = transform
 
-    def precompute_bags(self, ucc_combinations_: List[List[int]]) -> Tuple[List[torch.Tensor], List[int]]:
+    def precompute_bags(self, ucc_combinations: List[List[int]]) -> Tuple[List[torch.Tensor], List[int]]:
         """
         Precomputes the bags based on UCC combinations.
         """
@@ -91,7 +92,7 @@ class CIFAR10BagsDataset(Dataset):
         bag_labels = []
         # Randomly sample combinations to form the bags
         for _ in range(self.num_bags):
-            combination = random.choice(ucc_combinations_)
+            combination = random.choice(ucc_combinations)
             images_per_class = self.total_images_per_bag // len(combination)
             remainder = self.total_images_per_bag % len(combination)
 
@@ -145,6 +146,16 @@ class CIFAR10BagsDataset(Dataset):
 # MAIN
 ############################################
 
+@dataclass
+class DataConfig:
+    npz_path_: str = '../data/Splitted CIFAR10.npz'
+    lower_ucc: int = 2
+    upper_ucc: int = 4
+    bag_size: int = 300
+    bag_fraction: float = 0.3
+    batch_size: int = 32
+    transform: Dict = None
+
 def create_dataloaders(
         npz_path_: str,
         lower_ucc: int,
@@ -171,9 +182,49 @@ def create_dataloaders(
         )
 
         # Specify the custom collate function for the DataLoader
-        dataloaders[split] = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+        # dataloaders[split] = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn, num_workers=7)
+        if split == "train":
+            dataloaders[split] = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+        if split in ["val", "test"]:
+            dataloaders[split] = DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
 
     return dataloaders
+
+
+############################################
+# Viz
+############################################
+import matplotlib.pyplot as plt
+import torchvision
+
+
+def plot_images_from_two_bags(dataloader):
+    # Iterate over the dataloader
+    for batch in dataloader:
+        images, labels = batch
+        break  # Only take the first batch
+
+    # Plot the images from the first two bags
+    fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(12, 8))
+    for idx, ax in enumerate(axes.flat):
+        if idx >= 2:  # Only plot the first two bags
+            break
+        # Get the images and labels for the current bag
+        bag_images = images[idx]
+        bag_label = labels[idx]
+
+        # Plot title with the bag's label
+        ax.set_title(f'Bag Label: {bag_label.item()}')
+
+        # Grid of images in the bag
+        grid_img = torchvision.utils.make_grid(bag_images, nrow=10)  # Adjust nrow to your needs
+        ax.imshow(grid_img.permute(1, 2, 0))  # Permute to put the channel as the last dimension
+
+    plt.show()
+
+# Call the function with your dataloader
+
+
 
 
 if __name__ == "__main__":
@@ -184,17 +235,19 @@ if __name__ == "__main__":
     # use F so that it is direct transforms on tensor
     transforms = {
         'random_horizontal_flip': lambda img: F.hflip(img) if random.random() > 0.5 else img,
-        'random_vertical_flip': lambda img: F.vflip(img) if random.random() > 0.5 else img,
-        'color_jitter': lambda img: F.adjust_brightness(img, brightness_factor=random.uniform(0.8, 1.2)),
-        'normalize': lambda img: F.normalize(img, mean=[0.4914, 0.4822, 0.4465], std=[0.247, 0.243, 0.261])
+        # 'random_vertical_flip': lambda img: F.vflip(img) if random.random() > 0.5 else img,
+        'color_jitter': lambda img: F.adjust_brightness(img, brightness_factor=random.uniform(0.8, 1.5)),
+        # 'normalize': lambda img: F.normalize(img, mean=[0.4914, 0.4822, 0.4465], std=[0.247, 0.243, 0.261])
     }
 
-    dataloaders = create_dataloaders(PATH, 2, 4, 300, 0.1, 12, transforms)
+    dataloaders = create_dataloaders(PATH, 2, 4, 20, 1, 12, transforms)
 
     # Testing the dataloaders
     for images, labels in dataloaders['train']:
         print(f'Images batch shape: {images.shape}')
         print(f'Labels batch shape: {labels.shape}')
         print(f'Labels: {labels}')
-        print(f'Images: {images}')
+        # print(f'Images: {images}')
         break
+
+    plot_images_from_two_bags(dataloaders['train'])
