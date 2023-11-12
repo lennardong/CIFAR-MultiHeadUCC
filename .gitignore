@@ -241,3 +241,4 @@ fabric.properties
 research/
 *.npz
 data/Splitted CIFAR10.npz
+*.ckpt
