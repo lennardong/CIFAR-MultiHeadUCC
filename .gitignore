@@ -242,3 +242,4 @@ research/
 *.npz
 data/Splitted CIFAR10.npz
 *.ckpt
+checkpoints/
