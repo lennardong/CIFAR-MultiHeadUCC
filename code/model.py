@@ -31,9 +31,9 @@ class UCCModel(nn.Module):
         # Encoder: Simplified U-Net style without skip connections
         self.encoder = nn.Sequential(
             self.conv_downsampler(16, 1),  # output: 16 x 32 x 32
-            # self.conv_downsampler(16, 1),  # output: 16 x 32 x 32
+            self.conv_downsampler(16, 1),  # output: 16 x 32 x 32 (xtra)
             self.conv_downsampler(32, 2),  # output: 32 x 16 x 16
-            # self.conv_downsampler(32, 1),  # output: 32 x 16 x 16
+            self.conv_downsampler(32, 1),  # output: 32 x 16 x 16 (xtra)
             self.conv_downsampler(64, 2),  # output: 64 x 8 x 8
         )
 
@@ -49,9 +49,9 @@ class UCCModel(nn.Module):
         # Decoder: Simplified U-Net style without skip connections
         self.decoder = nn.Sequential(
             self.conv_upsampler(64, 2),  # output: 64 x 16 x 16
-            # self.conv_upsampler(64, 1),  # output: 64 x 16 x 16
+            self.conv_upsampler(64, 1),  # output: 64 x 16 x 16 (xtra)
             self.conv_upsampler(32, 2),  # output: 32 x 32 x 32
-            # self.conv_upsampler(32, 1),  # output: 32 x 32 x 32
+            self.conv_upsampler(32, 1),  # output: 32 x 32 x 32 (xtra)
             self.conv_upsampler(16, 1),  # output: 16 x 32 x 32
             nn.Conv2d(16, 3, kernel_size=1),  # output: 3 x 32 x 32
         )

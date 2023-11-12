@@ -20,7 +20,8 @@ def loss_function(logits, decoded_img, labels, original_imgs, ucc_loss_weight=0.
 
     return combined_loss
 
-class Trainer():
+
+class Trainer:
     def __init__(self,
                  model: nn.Module,
                  optimizer: torch.optim.Optimizer,
@@ -157,7 +158,6 @@ class Trainer():
                 }, f, indent=4
             )
 
-
     @staticmethod
     def loss_function(logits, decoded_img, labels, original_imgs, ucc_loss_weight=0.5):
 
@@ -168,6 +168,7 @@ class Trainer():
         combined_loss = (ucc_loss_weight * ucc_loss) + (ae_loss_weight * ae_loss)
 
         return combined_loss
+
 # Example usage:
 # trainer = Trainer(model, optimizer, train_loader, val_loader, device, "path_to_model_dir", "model_name", 10000, 100)
 # trainer.train()
